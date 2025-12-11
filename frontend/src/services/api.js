@@ -134,6 +134,17 @@ export const pollsAPI = {
       body: { accessCode },
     });
   },
+
+  updatePoll: async (pollId, pollData) => {
+    return await apiRequest(`/polls/${pollId}`, {
+      method: 'PUT',
+      body: pollData,
+    });
+  },
+
+  searchPolls: async (searchTerm) => {
+    return await apiRequest(`/polls/search?q=${encodeURIComponent(searchTerm)}`);
+  },
 };
 
 // API Blockchain

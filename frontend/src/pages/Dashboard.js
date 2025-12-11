@@ -21,6 +21,9 @@ const Dashboard = () => {
   const [selectedPoll, setSelectedPoll] = useState(null);
   const [accessCode, setAccessCode] = useState('');
   const [expandedPoll, setExpandedPoll] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [editingPoll, setEditingPoll] = useState(null);
+  const [editPollData, setEditPollData] = useState(null);
 
   useEffect(() => {
     // Kiểm tra đăng nhập
@@ -66,16 +69,19 @@ const Dashboard = () => {
     if (!socket) return;
 
     const handlePollUpdated = (data) => {
+      console.log('📡 Real-time update received:', data);
       setPolls(prevPolls => {
         return prevPolls.map(poll => {
-          if (poll._id === data.pollId || poll.id === data.pollId) {
+          const pollIdStr = (poll._id || poll.id || '').toString();
+          const dataPollIdStr = (data.pollId || '').toString();
+          
+          if (pollIdStr === dataPollIdStr) {
             return {
               ...poll,
               totalVotes: data.totalVotes,
               optionVotes: data.optionVotes,
               optionPercentages: data.optionPercentages,
-              votes: data.votes || poll.votes,
-              userVoted: poll.userVoted || false
+              votes: data.votes || poll.votes || []
             };
           }
           return poll;
@@ -133,25 +139,70 @@ const Dashboard = () => {
     navigate('/');
   };
 
-  const handleVote = async (pollId, optionIndex) => {
-    if (!currentUser) return;
+  const handlePollClick = (poll) => {
+    // Kiểm tra nếu là người tạo
+    const isCreator = currentUser && (poll.createdBy?._id === currentUser.id || poll.createdBy === currentUser.id);
+    
+    // Nếu poll là private và user chưa tham gia (và không phải người tạo), hiển thị modal nhập mã
+    if (poll.isPrivate && !isCreator) {
+      const isParticipant = poll.participants && poll.participants.some(p => {
+        const pId = (p._id || p || '').toString();
+        return pId === currentUser?.id;
+      });
+      
+      if (!isParticipant) {
+        setSelectedPoll(poll);
+        setShowAccessCodeModal(true);
+        return;
+      }
+    }
+    
+    // Mở trang chi tiết poll
+    navigate(`/poll/${poll._id || poll.id}`);
+  };
+
+  const handleSearch = async () => {
+    if (!searchTerm.trim()) {
+      await loadPolls();
+      return;
+    }
 
     try {
-      const response = await pollsAPI.vote(pollId, optionIndex);
-      
+      const response = await pollsAPI.searchPolls(searchTerm);
       if (response.success) {
-        // Cập nhật polls (socket sẽ tự động cập nhật real-time)
-        await loadPolls();
-        alert('Bình chọn thành công! Vote của bạn đã được lưu vào blockchain.');
+        setPolls(response.polls);
       }
     } catch (error) {
-      if (error.message.includes('mã tham gia')) {
-        // Hiển thị modal nhập mã tham gia
-        setSelectedPoll(polls.find(p => (p._id || p.id) === pollId));
-        setShowAccessCodeModal(true);
-      } else {
-        alert(error.message || 'Có lỗi xảy ra khi bình chọn!');
+      console.error('Lỗi khi tìm kiếm:', error);
+    }
+  };
+
+  const handleEditPoll = (poll) => {
+    setEditingPoll(poll);
+    setEditPollData({
+      title: poll.title,
+      description: poll.description,
+      options: poll.options,
+      isPrivate: poll.isPrivate,
+      startTime: poll.startTime ? new Date(poll.startTime).toISOString().slice(0, 16) : '',
+      endTime: poll.endTime ? new Date(poll.endTime).toISOString().slice(0, 16) : ''
+    });
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingPoll || !editPollData) return;
+
+    try {
+      const response = await pollsAPI.updatePoll(editingPoll._id || editingPoll.id, editPollData);
+      if (response.success) {
+        alert('Chỉnh sửa poll thành công!');
+        setEditingPoll(null);
+        setEditPollData(null);
+        await loadPolls();
       }
+    } catch (error) {
+      alert(error.message || 'Có lỗi xảy ra khi chỉnh sửa poll!');
     }
   };
 
@@ -166,9 +217,12 @@ const Dashboard = () => {
       if (response.success) {
         alert('Tham gia poll thành công!');
         setShowAccessCodeModal(false);
+        const pollId = selectedPoll._id || selectedPoll.id;
         setAccessCode('');
         setSelectedPoll(null);
         await loadPolls();
+        // Chuyển đến trang chi tiết poll
+        navigate(`/poll/${pollId}`);
       }
     } catch (error) {
       alert(error.message || 'Mã tham gia không đúng!');
@@ -435,7 +489,24 @@ const Dashboard = () => {
           )}
 
           <div className="polls-section">
-            <h2>Danh Sách Cuộc Bình Chọn</h2>
+            <div className="section-header">
+              <h2>Danh Sách Cuộc Bình Chọn</h2>
+              {currentUser.role === 'student' && (
+                <div className="search-box">
+                  <input
+                    type="text"
+                    placeholder="Tìm kiếm phòng bình chọn..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                    className="search-input"
+                  />
+                  <button onClick={handleSearch} className="search-button">
+                    🔍 Tìm kiếm
+                  </button>
+                </div>
+              )}
+            </div>
             
             {polls.length === 0 ? (
               <div className="no-polls">
@@ -451,7 +522,7 @@ const Dashboard = () => {
                   <div key={poll._id || poll.id} className="poll-card">
                     <div className="poll-header">
                       <div className="poll-header-top">
-                        <h3>{poll.title}</h3>
+                        <h3 onClick={() => handlePollClick(poll)} style={{ cursor: 'pointer' }}>{poll.title}</h3>
                         <div className="poll-badges">
                           {poll.isPrivate ? (
                             <span className="badge badge-private">🔒 Riêng tư</span>
@@ -474,93 +545,41 @@ const Dashboard = () => {
                         {poll.accessCode && isCreator && (
                           <div className="access-code-display">
                             <strong>Mã tham gia:</strong> <code>{poll.accessCode}</code>
+                            <small> (Chia sẻ mã này với sinh viên để tham gia)</small>
                           </div>
                         )}
                       </div>
                     </div>
                     
                     <p className="poll-description">{poll.description}</p>
-                    
-                    <div className="poll-options">
-                      {poll.options.map((option, index) => {
-                        const voted = hasUserVoted(poll);
-                        const percentage = getVotePercentage(poll, index);
-                        const userVoteOption = poll.userVoteOption;
-                        const canVoteNow = poll.canVote && !voted && status.text === 'Đang diễn ra';
 
-                        return (
-                          <div
-                            key={index}
-                            className={`poll-option ${voted && userVoteOption === index ? 'user-voted' : ''} ${!canVoteNow ? 'disabled' : ''}`}
-                            onClick={() => canVoteNow && handleVote(poll._id || poll.id, index)}
-                            title={!canVoteNow ? (voted ? 'Bạn đã bình chọn' : status.text === 'Sắp bắt đầu' ? 'Poll chưa bắt đầu' : status.text === 'Đã kết thúc' ? 'Poll đã kết thúc' : 'Bạn chưa tham gia poll này') : ''}
-                          >
-                            <div className="option-content">
-                              <span className="option-text">{option}</span>
-                              {voted && (
-                                <span className="option-percentage">{percentage}%</span>
-                              )}
-                            </div>
-                            {voted && (
-                              <div className="option-bar">
-                                <div
-                                  className="option-bar-fill"
-                                  style={{ width: `${percentage}%` }}
-                                />
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="poll-footer">
-                      <div className="footer-top">
-                        <span className="total-votes">
-                          Tổng số phiếu: {poll.totalVotes || poll.votes?.length || 0}
-                        </span>
-                        {hasUserVoted(poll) && (
-                          <span className="voted-badge">✓ Đã bình chọn</span>
-                        )}
-                        {poll.canVote === false && !hasUserVoted(poll) && poll.status === 'active' && poll.isPrivate && (
-                          <span className="need-access-badge">⚠️ Cần mã tham gia</span>
-                        )}
+                    {isCreator && status.text === 'Sắp bắt đầu' && (
+                      <div className="poll-actions">
+                        <button onClick={() => handleEditPoll(poll)} className="edit-poll-button">
+                          ✏️ Chỉnh sửa poll
+                        </button>
                       </div>
-                      {poll.votes && poll.votes.length > 0 && (
-                        <div className="vote-history-section">
-                          <button 
-                            className="toggle-history-btn"
-                            onClick={() => toggleVoteHistory(poll._id || poll.id)}
-                          >
-                            {expandedPoll === (poll._id || poll.id) ? '▼ Ẩn' : '▶ Xem'} lịch sử bình chọn ({poll.votes.length})
-                          </button>
-                          {expandedPoll === (poll._id || poll.id) && (
-                            <div className="vote-history">
-                              <h4>Lịch sử bình chọn (Blockchain)</h4>
-                              <div className="vote-list">
-                                {poll.votes.map((vote, idx) => (
-                                  <div key={idx} className="vote-item">
-                                    <div className="vote-user">
-                                      <strong>{vote.userName || 'Unknown'}</strong>
-                                      <span className="vote-email">{vote.userEmail || ''}</span>
-                                    </div>
-                                    <div className="vote-details">
-                                      <span className="vote-option">→ {vote.optionText || poll.options[vote.optionIndex]}</span>
-                                      <span className="vote-time">{formatDateTime(vote.votedAt)}</span>
-                                    </div>
-                                    <div className="vote-blockchain">
-                                      <div className="tx-hash">
-                                        <small>TX: {vote.transactionHash?.substring(0, 16)}...</small>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                    )}
+
+                    <div className="poll-preview-info">
+                      <div className="preview-stats">
+                        <span>📊 {poll.totalVotes || poll.votes?.length || 0} phiếu</span>
+                        <span>📝 {poll.options.length} lựa chọn</span>
+                        {hasUserVoted(poll) && <span className="voted-badge">✓ Đã bình chọn</span>}
+                      </div>
+                      <button 
+                        onClick={() => handlePollClick(poll)} 
+                        className="view-poll-button"
+                      >
+                        {poll.isPrivate && !isCreator && poll.participants && !poll.participants.some(p => {
+                          const pId = (p._id || p || '').toString();
+                          return pId === currentUser?.id;
+                        })
+                          ? '🔓 Nhập mã tham gia' 
+                          : '👉 Xem chi tiết & Bình chọn'}
+                      </button>
                     </div>
+
                   </div>
                 )})}
               </div>
@@ -573,16 +592,18 @@ const Dashboard = () => {
       {showAccessCodeModal && (
         <div className="modal-overlay" onClick={() => setShowAccessCodeModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>Nhập mã tham gia</h3>
+            <h3>Nhập mã tham gia phòng bình chọn</h3>
+            <p><strong>{selectedPoll?.title}</strong></p>
             <p>Poll này là riêng tư. Vui lòng nhập mã tham gia để tham gia bình chọn.</p>
             <div className="form-group">
               <input
                 type="text"
                 value={accessCode}
                 onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
-                placeholder="Nhập mã tham gia"
+                placeholder="Nhập mã tham gia (8 ký tự)"
                 maxLength="8"
                 className="access-code-input"
+                onKeyPress={(e) => e.key === 'Enter' && handleJoinPoll()}
               />
             </div>
             <div className="modal-actions">
@@ -597,6 +618,122 @@ const Dashboard = () => {
                 Hủy
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal chỉnh sửa poll */}
+      {editingPoll && editPollData && (
+        <div className="modal-overlay" onClick={() => {
+          setEditingPoll(null);
+          setEditPollData(null);
+        }}>
+          <div className="modal-content large-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Chỉnh sửa Poll: {editingPoll.title}</h3>
+            <form onSubmit={handleSaveEdit}>
+              <div className="form-group">
+                <label>Tiêu đề</label>
+                <input
+                  type="text"
+                  value={editPollData.title}
+                  onChange={(e) => setEditPollData({ ...editPollData, title: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Mô tả</label>
+                <textarea
+                  value={editPollData.description}
+                  onChange={(e) => setEditPollData({ ...editPollData, description: e.target.value })}
+                  rows="3"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Các lựa chọn</label>
+                {editPollData.options.map((option, index) => (
+                  <div key={index} className="option-input-group">
+                    <input
+                      type="text"
+                      value={option}
+                      onChange={(e) => {
+                        const newOptions = [...editPollData.options];
+                        newOptions[index] = e.target.value;
+                        setEditPollData({ ...editPollData, options: newOptions });
+                      }}
+                      required={index < 2}
+                    />
+                    {editPollData.options.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newOptions = editPollData.options.filter((_, i) => i !== index);
+                          setEditPollData({ ...editPollData, options: newOptions });
+                        }}
+                        className="remove-option-button"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setEditPollData({ ...editPollData, options: [...editPollData.options, ''] })}
+                  className="add-option-button"
+                >
+                  + Thêm lựa chọn
+                </button>
+              </div>
+
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={editPollData.isPrivate}
+                    onChange={(e) => setEditPollData({ ...editPollData, isPrivate: e.target.checked })}
+                  />
+                  <span style={{ marginLeft: '8px' }}>Poll riêng tư</span>
+                </label>
+              </div>
+
+              <div className="form-group">
+                <label>Thời gian bắt đầu</label>
+                <input
+                  type="datetime-local"
+                  value={editPollData.startTime}
+                  onChange={(e) => setEditPollData({ ...editPollData, startTime: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Thời gian kết thúc</label>
+                <input
+                  type="datetime-local"
+                  value={editPollData.endTime}
+                  onChange={(e) => setEditPollData({ ...editPollData, endTime: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="modal-actions">
+                <button type="submit" className="submit-button">
+                  Lưu thay đổi
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingPoll(null);
+                    setEditPollData(null);
+                  }}
+                  className="cancel-button"
+                >
+                  Hủy
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

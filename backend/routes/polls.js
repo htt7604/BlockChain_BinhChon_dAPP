@@ -111,6 +111,80 @@ router.post('/', auth, requireTeacher, async (req, res) => {
   }
 });
 
+// Tìm kiếm polls
+router.get('/search', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng nhập từ khóa tìm kiếm'
+      });
+    }
+
+    const polls = await Poll.find({
+      isActive: true,
+      $or: [
+        { isPrivate: false },
+        { participants: req.user._id }
+      ],
+      $or: [
+        { title: { $regex: q, $options: 'i' } },
+        { description: { $regex: q, $options: 'i' } }
+      ]
+    })
+      .sort({ createdAt: -1 })
+      .populate('createdBy', 'name email')
+      .exec();
+
+    const now = new Date();
+
+    const pollsWithStats = polls.map(poll => {
+      const pollObj = poll.toObject();
+      const totalVotes = poll.votes.length;
+      
+      pollObj.optionPercentages = {};
+      pollObj.options.forEach((_, index) => {
+        const votes = poll.optionVotes.get(index.toString()) || 0;
+        pollObj.optionPercentages[index] = totalVotes > 0 
+          ? Math.round((votes / totalVotes) * 100) 
+          : 0;
+      });
+
+      const userVote = poll.votes.find(
+        v => v.userId.toString() === req.user._id.toString()
+      );
+      pollObj.userVoted = !!userVote;
+      pollObj.userVoteOption = userVote ? userVote.optionIndex : null;
+
+      pollObj.status = 'upcoming';
+      if (now >= new Date(poll.startTime) && now <= new Date(poll.endTime)) {
+        pollObj.status = 'active';
+      } else if (now > new Date(poll.endTime)) {
+        pollObj.status = 'ended';
+      }
+
+      pollObj.canVote = !pollObj.userVoted && 
+                       pollObj.status === 'active' && 
+                       (pollObj.isPrivate ? poll.participants.includes(req.user._id) : true);
+
+      return pollObj;
+    });
+
+    res.json({
+      success: true,
+      polls: pollsWithStats
+    });
+  } catch (error) {
+    console.error('Lỗi khi tìm kiếm polls:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server khi tìm kiếm polls',
+      error: error.message
+    });
+  }
+});
+
 // Lấy tất cả polls (chỉ public hoặc user đã tham gia)
 router.get('/', auth, async (req, res) => {
   try {
@@ -158,9 +232,15 @@ router.get('/', auth, async (req, res) => {
       }
 
       // Kiểm tra user có thể vote không
+      const isParticipant = poll.participants.some(
+        p => p.toString() === req.user._id.toString()
+      ) || poll.createdBy.toString() === req.user._id.toString();
+      
       pollObj.canVote = !pollObj.userVoted && 
                        pollObj.status === 'active' && 
-                       (pollObj.isPrivate ? poll.participants.includes(req.user._id) : true);
+                       (pollObj.isPrivate ? isParticipant : true);
+      
+      pollObj.participants = poll.participants || [];
 
       return pollObj;
     });
@@ -195,7 +275,12 @@ router.get('/:id', auth, async (req, res) => {
     }
 
     // Kiểm tra quyền xem (nếu private)
-    if (poll.isPrivate && !poll.participants.includes(req.user._id) && poll.createdBy.toString() !== req.user._id.toString()) {
+    const isCreator = poll.createdBy.toString() === req.user._id.toString();
+    const isParticipant = poll.participants.some(
+      p => p.toString() === req.user._id.toString()
+    );
+    
+    if (poll.isPrivate && !isCreator && !isParticipant) {
       return res.status(403).json({
         success: false,
         message: 'Bạn chưa tham gia poll này. Vui lòng nhập mã tham gia.'
@@ -230,9 +315,10 @@ router.get('/:id', auth, async (req, res) => {
       pollObj.status = 'ended';
     }
 
-    // Lịch sử votes (công khai, như blockchain)
+    // Lịch sử votes (công khai, như blockchain) - hiển thị đầy đủ thông tin người bình chọn
     pollObj.voteHistory = poll.votes.map(vote => ({
       _id: vote._id,
+      userId: vote.userId?._id || vote.userId,
       userName: vote.userName || (vote.userId?.name || 'Unknown'),
       userEmail: vote.userEmail || (vote.userId?.email || ''),
       optionText: vote.optionText,
@@ -242,8 +328,11 @@ router.get('/:id', auth, async (req, res) => {
       votedAt: vote.votedAt
     })).sort((a, b) => new Date(b.votedAt) - new Date(a.votedAt)); // Sắp xếp mới nhất trước
 
+    // Thêm votes đầy đủ vào pollObj
+    pollObj.votes = pollObj.voteHistory;
+
     // Ẩn access code nếu không phải người tạo
-    if (poll.createdBy.toString() !== req.user._id.toString()) {
+    if (!isCreator) {
       pollObj.accessCode = undefined;
     }
 
@@ -362,8 +451,10 @@ router.post('/:id/vote', auth, async (req, res) => {
       });
     }
 
-    // Kiểm tra private poll - user phải tham gia
-    if (poll.isPrivate && !poll.participants.includes(req.user._id)) {
+    // Kiểm tra private poll - user phải tham gia (trừ người tạo)
+    if (poll.isPrivate && 
+        !poll.participants.includes(req.user._id) && 
+        poll.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Bạn chưa tham gia poll này. Vui lòng nhập mã tham gia.'
@@ -426,8 +517,10 @@ router.post('/:id/vote', auth, async (req, res) => {
 
     await poll.save();
 
-    // Lấy poll đã cập nhật
-    const updatedPoll = await Poll.findById(pollId).exec();
+    // Lấy poll đã cập nhật với đầy đủ thông tin
+    const updatedPoll = await Poll.findById(pollId)
+      .populate('votes.userId', 'name email')
+      .exec();
     
     const totalVotes = updatedPoll.votes.length;
 
@@ -440,18 +533,28 @@ router.post('/:id/vote', auth, async (req, res) => {
         : 0;
     });
 
-    // Emit socket event để cập nhật real-time
+    // Emit socket event để cập nhật real-time - broadcast to all clients
     const io = req.app.get('io');
     if (io) {
-      io.to(`poll-${pollId}`).emit('poll-updated', {
-        pollId: pollId,
-        vote: vote,
+      const voteData = {
+        pollId: pollId.toString(),
+        vote: {
+          _id: vote._id || updatedPoll.votes[updatedPoll.votes.length - 1]._id,
+          userId: vote.userId,
+          userName: vote.userName,
+          userEmail: vote.userEmail,
+          optionIndex: vote.optionIndex,
+          optionText: vote.optionText,
+          transactionHash: vote.transactionHash,
+          blockHash: vote.blockHash,
+          votedAt: vote.votedAt
+        },
         totalVotes: totalVotes,
         optionVotes: Object.fromEntries(updatedPoll.optionVotes),
         optionPercentages: optionPercentages,
         votes: updatedPoll.votes.map(v => ({
           _id: v._id,
-          userId: v.userId,
+          userId: v.userId?._id || v.userId,
           userName: v.userName,
           userEmail: v.userEmail,
           optionIndex: v.optionIndex,
@@ -460,7 +563,12 @@ router.post('/:id/vote', auth, async (req, res) => {
           blockHash: v.blockHash,
           votedAt: v.votedAt
         }))
-      });
+      };
+      
+      // Emit to specific poll room
+      io.to(`poll-${pollId}`).emit('poll-updated', voteData);
+      // Also emit globally để dashboard cũng update
+      io.emit('poll-updated', voteData);
     }
 
     res.json({
@@ -484,6 +592,99 @@ router.post('/:id/vote', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Lỗi server khi bình chọn',
+      error: error.message
+    });
+  }
+});
+
+// Chỉnh sửa poll (chỉ khi chưa bắt đầu, chỉ teacher tạo poll)
+router.put('/:id', auth, requireTeacher, async (req, res) => {
+  try {
+    const { title, description, options, isPrivate, startTime, endTime } = req.body;
+    const poll = await Poll.findById(req.params.id);
+
+    if (!poll) {
+      return res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy poll'
+      });
+    }
+
+    // Chỉ người tạo mới được sửa
+    if (poll.createdBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Bạn không có quyền chỉnh sửa poll này'
+      });
+    }
+
+    // Kiểm tra poll đã bắt đầu chưa
+    const now = new Date();
+    if (now >= new Date(poll.startTime)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Không thể chỉnh sửa poll đã bắt đầu hoặc đã kết thúc'
+      });
+    }
+
+    // Validation
+    if (title) poll.title = title;
+    if (description) poll.description = description;
+    if (options && Array.isArray(options) && options.length >= 2) {
+      const validOptions = options.filter(opt => opt && opt.trim());
+      if (validOptions.length >= 2) {
+        poll.options = validOptions;
+        // Reset optionVotes
+        const optionVotes = new Map();
+        validOptions.forEach((_, index) => {
+          optionVotes.set(index.toString(), 0);
+        });
+        poll.optionVotes = Object.fromEntries(optionVotes);
+      }
+    }
+    if (typeof isPrivate === 'boolean') {
+      poll.isPrivate = isPrivate;
+      // Tạo mã mới nếu chuyển từ public sang private
+      if (isPrivate && !poll.accessCode) {
+        poll.accessCode = generateAccessCode();
+      }
+      // Xóa mã nếu chuyển từ private sang public
+      if (!isPrivate) {
+        poll.accessCode = null;
+      }
+    }
+    if (startTime) {
+      const newStart = new Date(startTime);
+      if (newStart < now || newStart < new Date(poll.endTime)) {
+        poll.startTime = newStart;
+      }
+    }
+    if (endTime) {
+      const newEnd = new Date(endTime);
+      const start = startTime ? new Date(startTime) : poll.startTime;
+      if (newEnd > start) {
+        poll.endTime = newEnd;
+      }
+    }
+
+    await poll.save();
+
+    // Emit socket event
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('poll-updated', { pollId: poll._id, poll: poll.toObject() });
+    }
+
+    res.json({
+      success: true,
+      message: 'Chỉnh sửa poll thành công',
+      poll
+    });
+  } catch (error) {
+    console.error('Lỗi khi chỉnh sửa poll:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server khi chỉnh sửa poll',
       error: error.message
     });
   }

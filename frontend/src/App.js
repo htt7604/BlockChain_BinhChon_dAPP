@@ -4,6 +4,7 @@ import RoleSelection from './pages/RoleSelection';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
+import PollDetail from './pages/PollDetail';
 import './App.css';
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/poll/:id" element={<PollDetail />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
