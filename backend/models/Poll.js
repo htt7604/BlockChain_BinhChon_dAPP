@@ -6,8 +6,20 @@ const voteSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  userName: {
+    type: String,
+    required: true
+  },
+  userEmail: {
+    type: String,
+    required: true
+  },
   optionIndex: {
     type: Number,
+    required: true
+  },
+  optionText: {
+    type: String,
     required: true
   },
   blockHash: {
@@ -22,7 +34,7 @@ const voteSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   }
-});
+}, { _id: true });
 
 const pollSchema = new mongoose.Schema({
   title: {
@@ -62,7 +74,27 @@ const pollSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
-  }
+  },
+  isPrivate: {
+    type: Boolean,
+    default: false
+  },
+  accessCode: {
+    type: String,
+    default: null
+  },
+  startTime: {
+    type: Date,
+    default: Date.now
+  },
+  endTime: {
+    type: Date,
+    required: true
+  },
+  participants: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }]
 });
 
 // Index để tìm kiếm nhanh

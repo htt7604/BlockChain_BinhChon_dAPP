@@ -330,6 +330,268 @@
   font-weight: 600;
 }
 
+/* Poll Badges */
+.poll-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.poll-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge-private {
+  background: #ffe5e5;
+  color: #c00;
+}
+
+.badge-public {
+  background: #e5f3ff;
+  color: #0066cc;
+}
+
+.status-upcoming {
+  background: #fff4e5;
+  color: #cc8800;
+}
+
+.status-active {
+  background: #e5ffe5;
+  color: #00cc00;
+}
+
+.status-ended {
+  background: #f0f0f0;
+  color: #666;
+}
+
+/* Time Info */
+.poll-time-info {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+.time-item {
+  margin: 5px 0;
+  color: #666;
+}
+
+.time-item strong {
+  color: #333;
+  margin-right: 5px;
+}
+
+.access-code-display {
+  margin-top: 10px;
+  padding: 10px;
+  background: #f0f4ff;
+  border-radius: 8px;
+  border: 2px dashed #667eea;
+}
+
+.access-code-display code {
+  display: block;
+  margin-top: 5px;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #667eea;
+  letter-spacing: 3px;
+  font-family: 'Courier New', monospace;
+}
+
+/* Vote History */
+.vote-history-section {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 2px solid #e0e0e0;
+}
+
+.toggle-history-btn {
+  background: transparent;
+  border: none;
+  color: #667eea;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 5px 0;
+  text-align: left;
+  font-weight: 600;
+}
+
+.toggle-history-btn:hover {
+  color: #764ba2;
+}
+
+.vote-history {
+  margin-top: 15px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.vote-history h4 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 1rem;
+}
+
+.vote-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vote-item {
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  border-left: 3px solid #667eea;
+}
+
+.vote-user {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.vote-user strong {
+  color: #333;
+}
+
+.vote-email {
+  font-size: 0.85rem;
+  color: #999;
+}
+
+.vote-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 5px;
+}
+
+.vote-option {
+  color: #667eea;
+  font-weight: 500;
+}
+
+.vote-time {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.vote-blockchain {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.tx-hash {
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+  color: #999;
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 15px;
+  padding: 30px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modal-content h3 {
+  margin: 0 0 15px 0;
+  color: #333;
+}
+
+.modal-content p {
+  color: #666;
+  margin-bottom: 20px;
+}
+
+.access-code-input {
+  width: 100%;
+  padding: 12px;
+  font-size: 1.2rem;
+  letter-spacing: 5px;
+  text-align: center;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+  text-transform: uppercase;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.cancel-button {
+  flex: 1;
+  padding: 12px;
+  background: #f5f5f5;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #666;
+}
+
+.cancel-button:hover {
+  background: #e0e0e0;
+}
+
+.need-access-badge {
+  color: #cc8800;
+  font-size: 0.85rem;
+}
+
+.footer-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.poll-option.disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.poll-option.disabled:hover {
+  transform: none;
+  border-color: #e0e0e0;
+}
+
 @media (max-width: 768px) {
   .header-content {
     flex-direction: column;
@@ -347,6 +609,21 @@
 
   .dashboard-main {
     padding: 20px 15px;
+  }
+
+  .poll-header-top {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .vote-details {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+
+  .modal-content {
+    padding: 20px;
   }
 }
 

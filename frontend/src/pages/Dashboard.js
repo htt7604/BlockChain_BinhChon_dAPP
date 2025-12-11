@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authAPI, pollsAPI } from '../services/api';
+import { connectSocket, disconnectSocket, joinPollRoom, leavePollRoom, getSocket } from '../services/socket';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -11,8 +12,15 @@ const Dashboard = () => {
   const [newPoll, setNewPoll] = useState({
     title: '',
     description: '',
-    options: ['', '']
+    options: ['', ''],
+    isPrivate: false,
+    startTime: '',
+    endTime: ''
   });
+  const [showAccessCodeModal, setShowAccessCodeModal] = useState(false);
+  const [selectedPoll, setSelectedPoll] = useState(null);
+  const [accessCode, setAccessCode] = useState('');
+  const [expandedPoll, setExpandedPoll] = useState(null);
 
   useEffect(() => {
     // Kiểm tra đăng nhập
@@ -33,6 +41,9 @@ const Dashboard = () => {
           setCurrentUser(user);
         }
         
+        // Kết nối Socket.io
+        connectSocket();
+        
         // Load polls từ API
         await loadPolls();
       } catch (error) {
@@ -42,7 +53,68 @@ const Dashboard = () => {
     };
 
     loadUser();
+
+    // Cleanup khi unmount
+    return () => {
+      disconnectSocket();
+    };
   }, [navigate]);
+
+  // Lắng nghe socket events cho real-time updates
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handlePollUpdated = (data) => {
+      setPolls(prevPolls => {
+        return prevPolls.map(poll => {
+          if (poll._id === data.pollId || poll.id === data.pollId) {
+            return {
+              ...poll,
+              totalVotes: data.totalVotes,
+              optionVotes: data.optionVotes,
+              optionPercentages: data.optionPercentages,
+              votes: data.votes || poll.votes,
+              userVoted: poll.userVoted || false
+            };
+          }
+          return poll;
+        });
+      });
+    };
+
+    const handleNewPoll = (data) => {
+      if (data.poll) {
+        loadPolls(); // Reload để có đầy đủ thông tin
+      }
+    };
+
+    socket.on('poll-updated', handlePollUpdated);
+    socket.on('new-poll', handleNewPoll);
+
+    return () => {
+      socket.off('poll-updated', handlePollUpdated);
+      socket.off('new-poll', handleNewPoll);
+    };
+  }, []);
+
+  // Join/Leave poll rooms khi polls thay đổi
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket || polls.length === 0) return;
+
+    // Join tất cả poll rooms
+    polls.forEach(poll => {
+      joinPollRoom(poll._id || poll.id);
+    });
+
+    // Cleanup khi polls thay đổi
+    return () => {
+      polls.forEach(poll => {
+        leavePollRoom(poll._id || poll.id);
+      });
+    };
+  }, [polls.length]);
 
   const loadPolls = async () => {
     try {
@@ -68,12 +140,46 @@ const Dashboard = () => {
       const response = await pollsAPI.vote(pollId, optionIndex);
       
       if (response.success) {
-        // Reload polls để cập nhật dữ liệu
+        // Cập nhật polls (socket sẽ tự động cập nhật real-time)
         await loadPolls();
         alert('Bình chọn thành công! Vote của bạn đã được lưu vào blockchain.');
       }
     } catch (error) {
-      alert(error.message || 'Có lỗi xảy ra khi bình chọn!');
+      if (error.message.includes('mã tham gia')) {
+        // Hiển thị modal nhập mã tham gia
+        setSelectedPoll(polls.find(p => (p._id || p.id) === pollId));
+        setShowAccessCodeModal(true);
+      } else {
+        alert(error.message || 'Có lỗi xảy ra khi bình chọn!');
+      }
+    }
+  };
+
+  const handleJoinPoll = async () => {
+    if (!selectedPoll || !accessCode.trim()) {
+      alert('Vui lòng nhập mã tham gia!');
+      return;
+    }
+
+    try {
+      const response = await pollsAPI.joinPoll(selectedPoll._id || selectedPoll.id, accessCode);
+      if (response.success) {
+        alert('Tham gia poll thành công!');
+        setShowAccessCodeModal(false);
+        setAccessCode('');
+        setSelectedPoll(null);
+        await loadPolls();
+      }
+    } catch (error) {
+      alert(error.message || 'Mã tham gia không đúng!');
+    }
+  };
+
+  const toggleVoteHistory = (pollId) => {
+    if (expandedPoll === pollId) {
+      setExpandedPoll(null);
+    } else {
+      setExpandedPoll(pollId);
     }
   };
 
@@ -90,11 +196,27 @@ const Dashboard = () => {
       return;
     }
 
+    if (!newPoll.endTime) {
+      alert('Vui lòng chọn thời gian kết thúc bình chọn!');
+      return;
+    }
+
+    const startTime = newPoll.startTime ? new Date(newPoll.startTime) : new Date();
+    const endTime = new Date(newPoll.endTime);
+
+    if (endTime <= startTime) {
+      alert('Thời gian kết thúc phải sau thời gian bắt đầu!');
+      return;
+    }
+
     try {
       const pollData = {
         title: newPoll.title,
         description: newPoll.description,
-        options: newPoll.options.filter(opt => opt.trim())
+        options: newPoll.options.filter(opt => opt.trim()),
+        isPrivate: newPoll.isPrivate,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString()
       };
 
       const response = await pollsAPI.create(pollData);
@@ -107,14 +229,43 @@ const Dashboard = () => {
         setNewPoll({
           title: '',
           description: '',
-          options: ['', '']
+          options: ['', ''],
+          isPrivate: false,
+          startTime: '',
+          endTime: ''
         });
         setShowCreatePoll(false);
-        alert('Tạo cuộc bình chọn thành công!');
+        
+        let message = 'Tạo cuộc bình chọn thành công!';
+        if (response.poll && response.poll.accessCode) {
+          message += `\n\nMã tham gia: ${response.poll.accessCode}\n\nHãy lưu lại mã này để chia sẻ với người tham gia!`;
+        }
+        alert(message);
       }
     } catch (error) {
       alert(error.message || 'Có lỗi xảy ra khi tạo poll!');
     }
+  };
+
+  const formatDateTime = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleString('vi-VN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getPollStatus = (poll) => {
+    const now = new Date();
+    const start = new Date(poll.startTime);
+    const end = new Date(poll.endTime);
+
+    if (now < start) return { text: 'Sắp bắt đầu', class: 'status-upcoming' };
+    if (now >= start && now <= end) return { text: 'Đang diễn ra', class: 'status-active' };
+    return { text: 'Đã kết thúc', class: 'status-ended' };
   };
 
   const addOption = () => {
@@ -215,6 +366,36 @@ const Dashboard = () => {
                   </div>
 
                   <div className="form-group">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={newPoll.isPrivate}
+                        onChange={(e) => setNewPoll({ ...newPoll, isPrivate: e.target.checked })}
+                      />
+                      <span style={{ marginLeft: '8px' }}>Poll riêng tư (cần mã tham gia)</span>
+                    </label>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Thời gian bắt đầu (để trống = ngay bây giờ)</label>
+                    <input
+                      type="datetime-local"
+                      value={newPoll.startTime}
+                      onChange={(e) => setNewPoll({ ...newPoll, startTime: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Thời gian kết thúc *</label>
+                    <input
+                      type="datetime-local"
+                      value={newPoll.endTime}
+                      onChange={(e) => setNewPoll({ ...newPoll, endTime: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
                     <label>Các lựa chọn</label>
                     {newPoll.options.map((option, index) => (
                       <div key={index} className="option-input-group">
@@ -262,13 +443,40 @@ const Dashboard = () => {
               </div>
             ) : (
               <div className="polls-grid">
-                {polls.map(poll => (
+                {polls.map(poll => {
+                  const status = getPollStatus(poll);
+                  const isCreator = currentUser && (poll.createdBy?._id === currentUser.id || poll.createdBy === currentUser.id);
+                  
+                  return (
                   <div key={poll._id || poll.id} className="poll-card">
                     <div className="poll-header">
-                      <h3>{poll.title}</h3>
+                      <div className="poll-header-top">
+                        <h3>{poll.title}</h3>
+                        <div className="poll-badges">
+                          {poll.isPrivate ? (
+                            <span className="badge badge-private">🔒 Riêng tư</span>
+                          ) : (
+                            <span className="badge badge-public">🌐 Công khai</span>
+                          )}
+                          <span className={`badge ${status.class}`}>{status.text}</span>
+                        </div>
+                      </div>
                       <span className="poll-meta">
                         Bởi {poll.createdByName} • {new Date(poll.createdAt).toLocaleDateString('vi-VN')}
                       </span>
+                      <div className="poll-time-info">
+                        <div className="time-item">
+                          <strong>Bắt đầu:</strong> {formatDateTime(poll.startTime)}
+                        </div>
+                        <div className="time-item">
+                          <strong>Kết thúc:</strong> {formatDateTime(poll.endTime)}
+                        </div>
+                        {poll.accessCode && isCreator && (
+                          <div className="access-code-display">
+                            <strong>Mã tham gia:</strong> <code>{poll.accessCode}</code>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     
                     <p className="poll-description">{poll.description}</p>
@@ -278,12 +486,14 @@ const Dashboard = () => {
                         const voted = hasUserVoted(poll);
                         const percentage = getVotePercentage(poll, index);
                         const userVoteOption = poll.userVoteOption;
+                        const canVoteNow = poll.canVote && !voted && status.text === 'Đang diễn ra';
 
                         return (
                           <div
                             key={index}
-                            className={`poll-option ${voted && userVoteOption === index ? 'user-voted' : ''} ${voted ? 'disabled' : ''}`}
-                            onClick={() => !voted && handleVote(poll._id || poll.id, index)}
+                            className={`poll-option ${voted && userVoteOption === index ? 'user-voted' : ''} ${!canVoteNow ? 'disabled' : ''}`}
+                            onClick={() => canVoteNow && handleVote(poll._id || poll.id, index)}
+                            title={!canVoteNow ? (voted ? 'Bạn đã bình chọn' : status.text === 'Sắp bắt đầu' ? 'Poll chưa bắt đầu' : status.text === 'Đã kết thúc' ? 'Poll đã kết thúc' : 'Bạn chưa tham gia poll này') : ''}
                           >
                             <div className="option-content">
                               <span className="option-text">{option}</span>
@@ -305,20 +515,91 @@ const Dashboard = () => {
                     </div>
 
                     <div className="poll-footer">
-                      <span className="total-votes">
-                        Tổng số phiếu: {poll.totalVotes || poll.votes?.length || 0}
-                      </span>
-                      {hasUserVoted(poll) && (
-                        <span className="voted-badge">✓ Đã bình chọn</span>
+                      <div className="footer-top">
+                        <span className="total-votes">
+                          Tổng số phiếu: {poll.totalVotes || poll.votes?.length || 0}
+                        </span>
+                        {hasUserVoted(poll) && (
+                          <span className="voted-badge">✓ Đã bình chọn</span>
+                        )}
+                        {poll.canVote === false && !hasUserVoted(poll) && poll.status === 'active' && poll.isPrivate && (
+                          <span className="need-access-badge">⚠️ Cần mã tham gia</span>
+                        )}
+                      </div>
+                      {poll.votes && poll.votes.length > 0 && (
+                        <div className="vote-history-section">
+                          <button 
+                            className="toggle-history-btn"
+                            onClick={() => toggleVoteHistory(poll._id || poll.id)}
+                          >
+                            {expandedPoll === (poll._id || poll.id) ? '▼ Ẩn' : '▶ Xem'} lịch sử bình chọn ({poll.votes.length})
+                          </button>
+                          {expandedPoll === (poll._id || poll.id) && (
+                            <div className="vote-history">
+                              <h4>Lịch sử bình chọn (Blockchain)</h4>
+                              <div className="vote-list">
+                                {poll.votes.map((vote, idx) => (
+                                  <div key={idx} className="vote-item">
+                                    <div className="vote-user">
+                                      <strong>{vote.userName || 'Unknown'}</strong>
+                                      <span className="vote-email">{vote.userEmail || ''}</span>
+                                    </div>
+                                    <div className="vote-details">
+                                      <span className="vote-option">→ {vote.optionText || poll.options[vote.optionIndex]}</span>
+                                      <span className="vote-time">{formatDateTime(vote.votedAt)}</span>
+                                    </div>
+                                    <div className="vote-blockchain">
+                                      <div className="tx-hash">
+                                        <small>TX: {vote.transactionHash?.substring(0, 16)}...</small>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>
         </div>
       </main>
+
+      {/* Modal nhập mã tham gia */}
+      {showAccessCodeModal && (
+        <div className="modal-overlay" onClick={() => setShowAccessCodeModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Nhập mã tham gia</h3>
+            <p>Poll này là riêng tư. Vui lòng nhập mã tham gia để tham gia bình chọn.</p>
+            <div className="form-group">
+              <input
+                type="text"
+                value={accessCode}
+                onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
+                placeholder="Nhập mã tham gia"
+                maxLength="8"
+                className="access-code-input"
+              />
+            </div>
+            <div className="modal-actions">
+              <button onClick={handleJoinPoll} className="submit-button">
+                Tham gia
+              </button>
+              <button onClick={() => {
+                setShowAccessCodeModal(false);
+                setAccessCode('');
+                setSelectedPoll(null);
+              }} className="cancel-button">
+                Hủy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
