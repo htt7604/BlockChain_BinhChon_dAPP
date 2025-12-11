@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { authAPI, pollsAPI } from '../services/api';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -15,64 +16,68 @@ const Dashboard = () => {
 
   useEffect(() => {
     // Kiểm tra đăng nhập
-    const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
-    if (!user) {
-      navigate('/');
-      return;
-    }
-    setCurrentUser(user);
+    const loadUser = async () => {
+      try {
+        const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+        if (!user) {
+          // Thử lấy từ API
+          const response = await authAPI.getCurrentUser();
+          if (response.success) {
+            setCurrentUser(response.user);
+            localStorage.setItem('currentUser', JSON.stringify(response.user));
+          } else {
+            navigate('/');
+            return;
+          }
+        } else {
+          setCurrentUser(user);
+        }
+        
+        // Load polls từ API
+        await loadPolls();
+      } catch (error) {
+        console.error('Lỗi khi tải dữ liệu:', error);
+        navigate('/');
+      }
+    };
 
-    // Load polls từ localStorage
-    loadPolls();
+    loadUser();
   }, [navigate]);
 
-  const loadPolls = () => {
-    const savedPolls = JSON.parse(localStorage.getItem('polls') || '[]');
-    setPolls(savedPolls);
+  const loadPolls = async () => {
+    try {
+      const response = await pollsAPI.getAll();
+      if (response.success) {
+        setPolls(response.polls);
+      }
+    } catch (error) {
+      console.error('Lỗi khi tải polls:', error);
+    }
   };
 
   const handleLogout = () => {
+    authAPI.logout();
     localStorage.removeItem('currentUser');
     navigate('/');
   };
 
-  const handleVote = (pollId, optionIndex) => {
+  const handleVote = async (pollId, optionIndex) => {
     if (!currentUser) return;
 
-    const updatedPolls = polls.map(poll => {
-      if (poll.id === pollId) {
-        // Kiểm tra xem user đã vote chưa
-        const hasVoted = poll.votes && poll.votes.some(v => v.userId === currentUser.id);
-        if (hasVoted) {
-          alert('Bạn đã bình chọn cho cuộc khảo sát này rồi!');
-          return poll;
-        }
-
-        const votes = poll.votes || [];
-        votes.push({
-          userId: currentUser.id,
-          userEmail: currentUser.email,
-          optionIndex: optionIndex,
-          votedAt: new Date().toISOString()
-        });
-
-        return {
-          ...poll,
-          votes: votes,
-          optionVotes: {
-            ...poll.optionVotes,
-            [optionIndex]: (poll.optionVotes?.[optionIndex] || 0) + 1
-          }
-        };
+    try {
+      const response = await pollsAPI.vote(pollId, optionIndex);
+      
+      if (response.success) {
+        // Reload polls để cập nhật dữ liệu
+        await loadPolls();
+        alert('Bình chọn thành công! Vote của bạn đã được lưu vào blockchain.');
       }
-      return poll;
-    });
-
-    setPolls(updatedPolls);
-    localStorage.setItem('polls', JSON.stringify(updatedPolls));
+    } catch (error) {
+      alert(error.message || 'Có lỗi xảy ra khi bình chọn!');
+    }
   };
 
-  const handleCreatePoll = (e) => {
+  const handleCreatePoll = async (e) => {
     e.preventDefault();
     
     if (!newPoll.title.trim() || !newPoll.description.trim()) {
@@ -85,29 +90,31 @@ const Dashboard = () => {
       return;
     }
 
-    const poll = {
-      id: Date.now(),
-      title: newPoll.title,
-      description: newPoll.description,
-      options: newPoll.options.filter(opt => opt.trim()),
-      createdBy: currentUser.id,
-      createdByName: currentUser.name,
-      createdAt: new Date().toISOString(),
-      votes: [],
-      optionVotes: {}
-    };
+    try {
+      const pollData = {
+        title: newPoll.title,
+        description: newPoll.description,
+        options: newPoll.options.filter(opt => opt.trim())
+      };
 
-    const updatedPolls = [poll, ...polls];
-    setPolls(updatedPolls);
-    localStorage.setItem('polls', JSON.stringify(updatedPolls));
+      const response = await pollsAPI.create(pollData);
+      
+      if (response.success) {
+        // Reload polls
+        await loadPolls();
 
-    // Reset form
-    setNewPoll({
-      title: '',
-      description: '',
-      options: ['', '']
-    });
-    setShowCreatePoll(false);
+        // Reset form
+        setNewPoll({
+          title: '',
+          description: '',
+          options: ['', '']
+        });
+        setShowCreatePoll(false);
+        alert('Tạo cuộc bình chọn thành công!');
+      }
+    } catch (error) {
+      alert(error.message || 'Có lỗi xảy ra khi tạo poll!');
+    }
   };
 
   const addOption = () => {
@@ -137,15 +144,14 @@ const Dashboard = () => {
   };
 
   const hasUserVoted = (poll) => {
-    if (!currentUser || !poll.votes) return false;
-    return poll.votes.some(v => v.userId === currentUser.id);
+    return poll.userVoted || false;
   };
 
   const getVotePercentage = (poll, optionIndex) => {
-    const totalVotes = poll.votes?.length || 0;
-    if (totalVotes === 0) return 0;
-    const optionVotes = poll.optionVotes?.[optionIndex] || 0;
-    return Math.round((optionVotes / totalVotes) * 100);
+    if (poll.optionPercentages && poll.optionPercentages[optionIndex] !== undefined) {
+      return poll.optionPercentages[optionIndex];
+    }
+    return 0;
   };
 
   if (!currentUser) {
@@ -257,7 +263,7 @@ const Dashboard = () => {
             ) : (
               <div className="polls-grid">
                 {polls.map(poll => (
-                  <div key={poll.id} className="poll-card">
+                  <div key={poll._id || poll.id} className="poll-card">
                     <div className="poll-header">
                       <h3>{poll.title}</h3>
                       <span className="poll-meta">
@@ -271,13 +277,13 @@ const Dashboard = () => {
                       {poll.options.map((option, index) => {
                         const voted = hasUserVoted(poll);
                         const percentage = getVotePercentage(poll, index);
-                        const userVote = poll.votes?.find(v => v.userId === currentUser.id);
+                        const userVoteOption = poll.userVoteOption;
 
                         return (
                           <div
                             key={index}
-                            className={`poll-option ${voted && userVote?.optionIndex === index ? 'user-voted' : ''} ${voted ? 'disabled' : ''}`}
-                            onClick={() => !voted && handleVote(poll.id, index)}
+                            className={`poll-option ${voted && userVoteOption === index ? 'user-voted' : ''} ${voted ? 'disabled' : ''}`}
+                            onClick={() => !voted && handleVote(poll._id || poll.id, index)}
                           >
                             <div className="option-content">
                               <span className="option-text">{option}</span>
@@ -300,7 +306,7 @@ const Dashboard = () => {
 
                     <div className="poll-footer">
                       <span className="total-votes">
-                        Tổng số phiếu: {poll.votes?.length || 0}
+                        Tổng số phiếu: {poll.totalVotes || poll.votes?.length || 0}
                       </span>
                       {hasUserVoted(poll) && (
                         <span className="voted-badge">✓ Đã bình chọn</span>
