@@ -127,6 +127,13 @@ export const pollsAPI = {
       method: 'DELETE',
     });
   },
+
+  joinPoll: async (pollId, accessCode) => {
+    return await apiRequest(`/polls/${pollId}/join`, {
+      method: 'POST',
+      body: { accessCode },
+    });
+  },
 };
 
 // API Blockchain

@@ -1,9 +1,24 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
 require('dotenv').config();
 
 const app = express();
+const server = http.createServer(app);
+
+// Cấu hình Socket.io
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+
+// Lưu trữ io instance để sử dụng trong routes
+app.set('io', io);
 
 // Middleware
 app.use(cors());
@@ -46,9 +61,31 @@ app.get('/', (req, res) => {
   });
 });
 
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('✅ Client đã kết nối:', socket.id);
+
+  // Join room cho một poll cụ thể
+  socket.on('join-poll', (pollId) => {
+    socket.join(`poll-${pollId}`);
+    console.log(`Client ${socket.id} đã join poll ${pollId}`);
+  });
+
+  // Leave room
+  socket.on('leave-poll', (pollId) => {
+    socket.leave(`poll-${pollId}`);
+    console.log(`Client ${socket.id} đã leave poll ${pollId}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('❌ Client đã ngắt kết nối:', socket.id);
+  });
+});
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
+  console.log(`🔌 Socket.io đã sẵn sàng!`);
 });
 
 module.exports = app;
